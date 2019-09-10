@@ -1,3 +1,5 @@
 #Ignore Data folder -- too heavy
 Data/
 
+#Ignore useless Python Lab files
+.ipynb_checkpoints/
