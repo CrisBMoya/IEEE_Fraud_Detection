@@ -3,7 +3,6 @@
 #Import Modules
 import pandas as pd
 import zipfile as zip
-import tensorflow as tf
 import plotly as plt
 import numpy as np
 import plotly.express as px
@@ -12,6 +11,7 @@ import os
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import GridSearchCV
 
 #Load Training data
 TrainTransaction=pd.read_csv(zip.ZipFile('Data/train_transaction.csv.zip').open("train_transaction.csv"))
@@ -77,22 +77,25 @@ MostPresservedPatterns
 #Train and test sets
 X_train, X_test, y_train, y_test = train_test_split(TrainTransaction[["C"+str(X) for X in [1,2,3,5,6,7,11,12]]], TrainTransaction['isFraud'], test_size=0.3, random_state=42)
 
-#Set up SDG Model
-SDGModel=SGDClassifier(loss="hinge", penalty="l2", max_iter=50000)
-SDGModel.fit(X_train, y_train)
+#Set up SDG Model with Grid Search
+Parameter_Grid={'loss':['log','hinge','modified_huber','squared_hinge','perceptron','squared_loss','huber','epsilon_insensitive','squared_epsilon_insensitive'], 'penalty':['none','l2','l1','elasticnet']}
+Grid_Search=GridSearchCV(estimator=SGDClassifier(), param_grid=Parameter_Grid, verbose=3, refit=True)
+Grid_Search.fit(X_train, y_train)
+Grid_Search.best_params_
+Grid_Search.best_estimator_
 
-#Predict values
-PredictedValues=SDGModel.predict(X_test)
+#Improve SDG model results
+Grid_Predictions=Grid_Search.predict(X_test)
 
 #Metrics
-print(confusion_matrix(y_test, PredictedValues))
-print(classification_report(y_test, PredictedValues))
+print(confusion_matrix(y_test, Grid_Predictions))
+print(classification_report(y_test, Grid_Predictions))
 
 #Save Parameters
 text_file = open("Params_V2.txt", "w")
 text_file.write("%s\n" % SDGModel.get_params())
-text_file.write("%s\n" % confusion_matrix(y_test, PredictedValues))
-text_file.write("%s\n" % classification_report(y_test, PredictedValues))
+text_file.write("%s\n" % confusion_matrix(y_test, Grid_Predictions))
+text_file.write("%s\n" % classification_report(y_test, Grid_Predictions))
 text_file.close()
 
 #Try with test
@@ -115,5 +118,5 @@ SubmitResults.to_csv(path_or_buf='SubmitResults.csv',index=False)
 #Submit through API
 RE=True
 if RE==True:
-    os.system('kaggle competitions submit -c ieee-fraud-detection -f SubmitResults.csv -m "V1 Submission from API"')
+    os.system('kaggle competitions submit -c ieee-fraud-detection -f SubmitResults.csv -m "V2 Submission from API"')
 pass
