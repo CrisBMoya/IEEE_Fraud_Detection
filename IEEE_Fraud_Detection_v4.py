@@ -6,6 +6,8 @@ import zipfile as zip
 import plotly as plt
 import numpy as np
 import seaborn as sns
+import plotly.express as px
+import plotly.graph_objs as go
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
@@ -22,10 +24,17 @@ TrainTransaction.columns
 TrainIdentity.columns
 
 #DEA and Feature Engineering
+TrainTransaction['isFraud'].sum()
+TrainTransaction.shape[0]-TrainTransaction['isFraud'].sum()
 
 #Data Transformation
 #C1 to C14 are described as a counting columns, the actual meaning are masked, so we will sum theese.
 TrainTransaction["CSum"]=TrainTransaction[["C"+str(X) for X in range(1,15)]].sum(axis=1)
+
+#Barplot of the mean
+sns.barplot(data=TrainTransaction[['isFraud','CSum']].groupby(by='isFraud', as_index=False).mean(), x='isFraud', y='CSum')
+#Same as this BTW:
+sns.barplot(x=TrainTransaction['isFraud'], y=TrainTransaction['CSum'])
 
 #Also, create a pattern for the columns by putting them together as a categorical value
 for i in TrainTransaction[["C"+str(X) for X in range(1,15)]]:
@@ -35,45 +44,76 @@ for i in TrainTransaction[["C"+str(X) for X in range(1,15)]]:
         CPattern=CPattern + '|' + TrainTransaction[i].astype('str')
 pass
 TrainTransaction['CPattern']=CPattern 
-TrainTransaction['CPattern'].nunique()
-
-#Delete C columns
-TrainTransaction.drop(columns=["C"+str(X) for X in range(1,15)], inplace=True)
-
-#EDA -- Exploratory Data Analysis - Cant do shit, data is too big.
-_, Sampled, _, _=train_test_split(TrainTransaction, TrainTransaction["isFraud"], test_size=100/TrainTransaction.shape[0])
-px.bar(data_frame=Sampled, x="isFraud", y="CSum", color="isFraud")
 
 #Check if a certain CPattern cause more frauds than others
 CPatternFraud=TrainTransaction[['CPattern','isFraud']].groupby(by='CPattern', as_index=False).sum().sort_values(by='isFraud',ascending=False)
 
-#Take top 10 fraudulent CPatterns and test for common patterns between those 10
-Top10=CPatternFraud.iloc[0:10,]
-Splitted=pd.DataFrame(Top10['CPattern'].str.split('|').tolist(), columns=["C"+str(X) for X in range(1,15)])
-Splitted=Splitted.apply(lambda x: x.astype(float))
-Splitted['SumFraud']=Top10['isFraud'].values
+#Take top 20 fraudulent CPatterns and test for common patterns between those 10
+Top20=CPatternFraud.iloc[0:20,]
 
-#There must be a esier way to do this, I just do this and works so...
-FrequencyPattern=[]
-for i in ["C"+str(X) for X in range(1,15)]:
-    FrequencyPattern.append(Splitted[i].value_counts()*100/10)
-pass
+#Split patterns to its original form and turn values to float numbers
+Splitted=pd.DataFrame(Top20['CPattern'].str.split('|').tolist(), columns=["C"+str(X) for X in range(1,15)]).apply(lambda x: x.astype(float))
 
-TEMPList=[]
-for i in range(0,len(FrequencyPattern)):
-    if len(FrequencyPattern[i])==1:
-        TEMPList.append(FrequencyPattern[i].name + '|' + str(FrequencyPattern[i].index[0]) + "|" + str(FrequencyPattern[i].values[0]))
-    else:
-        for x in range(0,len(FrequencyPattern[i])):
-            TEMPList.append(FrequencyPattern[i].name + '|' + str(FrequencyPattern[i].index[x]) + '|' + str(FrequencyPattern[i].values[x]))
-pass
-TEMPList=np.asarray(TEMPList)
-FreqDF=pd.DataFrame(pd.DataFrame(TEMPList)[0].str.split('|').tolist(), columns=['C','Value','Frequency'])
-FreqDF['Frequency']=FreqDF['Frequency'].astype('float')
-MostPresservedPatterns=FreqDF[FreqDF['Frequency']>70]
-MostPresservedPatterns
+Top20['isFraud'].values
 
-##Create Predictions based on theese values: C1 C2 C3 C5 C6 C7 C11 C12
+#Count how many unique values repeats per C column
+Splitted=Splitted.apply(axis=0, func=lambda x: pd.value_counts(x))
+
+#Add CPattern column
+Splitted['CPattern']=Splitted.index
+
+#Metl DF
+Splitted=Splitted.melt(id_vars=['CPattern']).dropna()
+
+#Apply treshold. Values must be repeated above 90%
+Splitted[Splitted['value']>9]['variable'].unique().size #That's like... all C columns... incredibly useless!
+Splitted[Splitted['value']>9]['variable'].unique()
+
+
+##Lets do more visualizations!
+
+#Ammount of transaction and Fraud
+sns.barplot(data=TrainTransaction[['isFraud','TransactionAmt']].groupby(by='isFraud', as_index=False).mean(), x='isFraud', y='TransactionAmt')
+
+#See if theres a relation between ammount of transaction and fraud frequency
+GroupTransactionAmmount=TrainTransaction[['isFraud','TransactionAmt']].groupby(by='TransactionAmt', as_index=False)
+Top20TranAmt=GroupTransactionAmmount.count().sort_values(by='isFraud',ascending=False).iloc[0:50,].sort_values(by='isFraud',ascending=True)
+
+#Plot -- it doesnt say much. Use quantiles to analyze more data
+go.Figure(data=[go.Bar(x=Top20TranAmt['isFraud'], y=Top20TranAmt['TransactionAmt'])], layout=go.Layout(xaxis={'type': 'category'}))
+
+#Getting quantiles -- 25?
+BinNum=25
+TrainTransaction['QuantileAmt']=pd.qcut(x=TrainTransaction['TransactionAmt'], q=BinNum, labels=['Q'+str(X) for X in range(1,(BinNum+1))])
+GroupTransactionAmmount=TrainTransaction[['isFraud','QuantileAmt']].groupby(by='QuantileAmt', as_index=False).count()
+GroupTransactionAmmount=GroupTransactionAmmount.sort_values(by='isFraud', ascending=True)
+P1=go.Figure(data=[go.Bar(x=GroupTransactionAmmount['QuantileAmt'], y=GroupTransactionAmmount['isFraud'])], layout=go.Layout(xaxis={'type': 'category'}))
+P1.add_trace(go.Scatter(x=['Q'+str(X) for X in range(1,(BinNum+1))], y=[GroupTransactionAmmount['isFraud'].max()/2 for X in range(0,BinNum)], mode='lines'))
+
+#Investigate Product ID
+TrainTransaction['ProductCD'].nunique() #Just 5 classes
+sns.barplot(data=TrainTransaction[['isFraud','ProductCD']].groupby(by='ProductCD', as_index=False).mean(), x='isFraud', y='ProductCD')
+
+#Cross Product ID and Price
+TEMP=TrainTransaction[['ProductCD','QuantileAmt','isFraud']].groupby(by=['QuantileAmt','ProductCD'], as_index=False).mean()
+TEMP.plot(kind='col', x='isFraud')
+TEMP.sort_values(by='isFraud', ascending=False)
+TrainTransaction[(TrainTransaction['ProductCD']=='C') & (TrainTransaction['QuantileAmt']=='Q25')]
+
+
+sns.distplot(TrainTransaction[['ProductCD','QuantileAmt']])
+
+
+
+
+
+
+
+
+
+
+
+##Create Predictions based on C values
 #Train and test sets
 TempTrain=TrainTransaction[np.concatenate((["C"+str(X) for X in [1,2,3,5,6,7,11,12]],["D"+str(X) for X in range(1,16)]))]
 TempTrain.fillna(value=0, inplace=True)
