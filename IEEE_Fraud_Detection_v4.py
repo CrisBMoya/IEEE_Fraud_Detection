@@ -9,9 +9,11 @@ import seaborn as sns
 import plotly.express as px
 import plotly.graph_objs as go
 
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import GridSearchCV
 
 #Load Training data
 TrainTransaction=pd.read_csv(zip.ZipFile('Data/train_transaction.csv.zip').open("train_transaction.csv"))
@@ -95,68 +97,95 @@ TrainTransaction['ProductCD'].nunique() #Just 5 classes
 sns.barplot(data=TrainTransaction[['isFraud','ProductCD']].groupby(by='ProductCD', as_index=False).mean(), x='isFraud', y='ProductCD')
 
 #Cross Product ID and Price
-TEMP=TrainTransaction[['ProductCD','QuantileAmt','isFraud']].groupby(by=['QuantileAmt','ProductCD'], as_index=False).mean()
-TEMP.plot(kind='col', x='isFraud')
-TEMP.sort_values(by='isFraud', ascending=False)
-TrainTransaction[(TrainTransaction['ProductCD']=='C') & (TrainTransaction['QuantileAmt']=='Q25')]
+
+#Create grouped object
+CrossDFGroup=TrainTransaction[['ProductCD','QuantileAmt','isFraud']].groupby(by=['QuantileAmt','ProductCD'], as_index=False)
+
+#Compute Mean
+CrossDF=CrossDFGroup.mean()
+#Compute non fraud frequency
+CrossDF["CountNonFraud"]=CrossDFGroup.apply(lambda x: np.sum(x==0))["isFraud"]
+#Compute fraud frequency
+CrossDF["CountFraud"]=CrossDFGroup.apply(lambda x: np.sum(x==1))["isFraud"]
+CrossDF.head()
+
+#Plot has outliers
+Fig=px.bar(data_frame=CrossDF, x="QuantileAmt", y="isFraud", color='ProductCD', barmode='group', hover_data=['CountNonFraud', 'CountFraud'])
+Fig.show(renderer="browser")
+
+#Remove outliers
+CrossDF.dropna(inplace=True)
+CrossDF=CrossDF[(CrossDF["CountNonFraud"]>0) & (CrossDF["CountFraud"]>0)]
+
+#Plot again -- it seems like product C always get scammed. Also H in higher quantiles. S looks erratic.
+Fig=px.bar(data_frame=CrossDF, x="ProductCD", y="isFraud", color='QuantileAmt', barmode='group', hover_data=['CountNonFraud', 'CountFraud'])
+Fig.show(renderer="browser")
+
+#P_emaildomain
+GroupP=TrainTransaction[['isFraud','P_emaildomain']].groupby(by='P_emaildomain', as_index=False)
+GroupPMean=GroupP.mean()
+GroupPMean["CountNonFraud"]=GroupP.apply(lambda x: np.sum(x==0))["isFraud"]
+GroupPMean["CountFraud"]=GroupP.apply(lambda x: np.sum(x==1))["isFraud"]
+
+Fig=px.bar(data_frame=GroupPMean, x="P_emaildomain", y="isFraud", hover_data=['CountNonFraud', 'CountFraud'])
+Fig.show(renderer="browser")
 
 
-sns.distplot(TrainTransaction[['ProductCD','QuantileAmt']])
-
-
-
-
-
-
-
-
-
-
-
+############################################################
+############################################################
+############################################################
+############################################################
 ##Create Predictions based on C values
 #Train and test sets
-TempTrain=TrainTransaction[np.concatenate((["C"+str(X) for X in [1,2,3,5,6,7,11,12]],["D"+str(X) for X in range(1,16)]))]
-TempTrain.fillna(value=0, inplace=True)
-TempTrain.head()
+ColumnSelect=np.asarray(["C"+str(X) for X in range(1,15)])
+TempTrain=TrainTransaction[ColumnSelect]
+TempTrain=TempTrain.join([pd.get_dummies(data=TrainTransaction["ProductCD"]), pd.get_dummies(data=TrainTransaction["P_emaildomain"]), pd.get_dummies(data=TrainTransaction["QuantileAmt"])])
+TempTrain.columns.values
 X_train, X_test, y_train, y_test = train_test_split(TempTrain, TrainTransaction['isFraud'], test_size=0.1, random_state=42)
 
-#Set up SDG Model
-SDGModel=SGDClassifier(loss="log", penalty="l2", max_iter=1000)
-SDGModel.fit(X_train, y_train)
+#Set up SDG Model with Grid Search
+Parameter_Grid={'loss':['log','hinge','modified_huber','squared_hinge','perceptron','squared_loss','huber','epsilon_insensitive','squared_epsilon_insensitive'], 'penalty':['none','l2','l1','elasticnet']}
+Grid_Search=GridSearchCV(estimator=SGDClassifier(), param_grid=Parameter_Grid, verbose=3, refit=True)
+Grid_Search.fit(X_train, y_train)
+Grid_Search.best_params_
+Grid_Search.best_estimator_
 
-#Predict values
-PredictedValues=SDGModel.predict(X_test)
+#Improve SDG model results
+Grid_Predictions=Grid_Search.predict(X_test)
 
 #Metrics
-print(confusion_matrix(y_test, PredictedValues))
-print(classification_report(y_test, PredictedValues))
+print(confusion_matrix(y_test, Grid_Predictions))
+print(classification_report(y_test, Grid_Predictions))
 
 #Save Parameters
-text_file = open("Params_V3.txt", "w")
-text_file.write("%s\n" % SDGModel.get_params())
-text_file.write("%s\n" % confusion_matrix(y_test, PredictedValues))
-text_file.write("%s\n" % classification_report(y_test, PredictedValues))
+text_file = open("Params_V4.txt", "w")
+text_file.write("%s\n" % Grid_Search.get_params())
+text_file.write("%s\n" % confusion_matrix(y_test, Grid_Predictions))
+text_file.write("%s\n" % classification_report(y_test, Grid_Predictions))
 text_file.close()
 
 #Try with test
 TestSet_dev=pd.read_csv(zip.ZipFile('Data/test_transaction.csv.zip').open("test_transaction.csv"))
-X_test_dev=TestSet_dev[np.concatenate((["C"+str(X) for X in [1,2,3,5,6,7,11,12]],["D"+str(X) for X in range(1,16)]))]
+TestSet_dev['QuantileAmt']=pd.qcut(x=TestSet_dev['TransactionAmt'], q=BinNum, duplicates="drop", labels=['Q'+str(X) for X in range(1,(24+1))])
+
+X_test_dev=TestSet_dev[ColumnSelect]
+X_test_dev=X_test_dev.join([pd.get_dummies(data=TestSet_dev["ProductCD"]), pd.get_dummies(data=TestSet_dev["P_emaildomain"]), pd.get_dummies(data=TestSet_dev["QuantileAmt"])])
 X_test_dev.shape
 X_test_dev.dropna().shape
 X_test_dev.fillna(value=0, inplace=True)
 
 ##################
 #Submit predictions
-PredictedValues_Dev=SDGModel.predict(X_test_dev)
+PredictedValues_Dev=Grid_Search.predict(X_test_dev)
 
 #Generate file
 SubmitResults=pd.DataFrame(data={'TransactionID':TestSet_dev['TransactionID'], 'isFraud':PredictedValues_Dev})
 SubmitResults.head()
-SubmitResults.to_csv(path_or_buf='SubmitResults_V3.csv',index=False)
+SubmitResults.to_csv(path_or_buf='SubmitResults_V4.csv',index=False)
 
 #Submit through API
 import os
 RE=False
 if RE==True:
-    os.system('kaggle competitions submit -c ieee-fraud-detection -f SubmitResults.csv -m "V3 Submission from API"')
+    os.system('kaggle competitions submit -c ieee-fraud-detection -f SubmitResults_V4.csv -m "V4 Submission from API"')
 pass
